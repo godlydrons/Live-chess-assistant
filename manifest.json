@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Lichess Engine Pilot",
+  "version": "1.0.0",
+  "description": "Auto-plays the engine's best move on Lichess with rapid, precise execution.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://lichess.org/*",
+    "https://stockfish.online/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16":  "icon.png",
+      "48":  "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://lichess.org/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16":  "icon.png",
+    "48":  "icon.png",
+    "128": "icon.png"
+  }
+}
