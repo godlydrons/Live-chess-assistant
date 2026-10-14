@@ -1,79 +1,93 @@
-/* popup.js — handles toggle, settings persistence, and live move log */
+/* popup.js v6 */
+const toggle   = document.getElementById("toggle");
+const statusB  = document.getElementById("statusBar");
+const depthV   = document.getElementById("depthV");
+const delayV   = document.getElementById("delayV");
+const oriSel   = document.getElementById("oriSel");
+const cropBtn  = document.getElementById("cropBtn");
+const cropClr  = document.getElementById("cropClear");
+const logEl    = document.getElementById("logEl");
+const modeAuto = document.getElementById("modeAutoplay");
+const modeHl   = document.getElementById("modeHighlight");
 
-const toggle    = document.getElementById("toggleSwitch");
-const dot       = document.getElementById("statusDot");
-const statusTxt = document.getElementById("statusText");
-const logEl     = document.getElementById("logEntries");
+chrome.storage.local.get(
+  ["active","depth","delay","orientation","cropBox","moveLog","status","mode"],
+  (r) => {
+    toggle.checked       = !!r.active;
+    depthV.textContent   = r.depth ?? 8;
+    delayV.textContent   = r.delay       ?? 100;
+    oriSel.value         = r.orientation ?? "auto";
+    setMode(r.mode       ?? "autoplay");
+    renderLog(r.moveLog  ?? []);
+    setStatus(r.status   ?? (r.active ? "🟢 Watching…" : "⚫ Inactive"), !!r.active);
+    setCropUI(!!r.cropBox);
+  }
+);
 
-const depthVal  = document.getElementById("depthVal");
-const delayVal  = document.getElementById("delayVal");
-
-/* ── Load stored state ─────────────────────────────────────────── */
-chrome.storage.local.get(["active", "depth", "delay", "moveLog"], (res) => {
-  const isActive = !!res.active;
-  const depth    = res.depth  ?? 12;
-  const delay    = res.delay  ?? 180;
-  const moves    = res.moveLog ?? [];
-
-  toggle.checked  = isActive;
-  depthVal.textContent = depth;
-  delayVal.textContent = delay;
-  setStatus(isActive);
-  renderLog(moves);
-});
-
-/* ── Toggle ────────────────────────────────────────────────────── */
 toggle.addEventListener("change", () => {
-  const isActive = toggle.checked;
-  chrome.storage.local.set({ active: isActive });
-  setStatus(isActive);
-  if (!isActive) chrome.storage.local.set({ moveLog: [] });
+  const on = toggle.checked;
+  chrome.storage.local.set({ active: on });
+  if (!on) { chrome.storage.local.set({ moveLog:[], status:"⚫ Inactive" }); setStatus("⚫ Inactive",false); }
 });
 
-function setStatus(on) {
-  dot.classList.toggle("on", on);
-  statusTxt.classList.toggle("on", on);
-  statusTxt.textContent = on
-    ? "Active — watching for your turn…"
-    : "Inactive — open a Lichess game";
+document.getElementById("dD").onclick = () => adj("depth", -1,  1, 16, depthV);
+document.getElementById("dU").onclick = () => adj("depth", +1,  1, 16, depthV);
+document.getElementById("lD").onclick = () => adj("delay",-50,  0,2000,delayV);
+document.getElementById("lU").onclick = () => adj("delay",+50,  0,2000,delayV);
+function adj(key,delta,min,max,el){
+  const next=Math.min(max,Math.max(min,parseInt(el.textContent)+delta));
+  el.textContent=next; chrome.storage.local.set({[key]:next});
 }
 
-/* ── Depth control (1–16) ──────────────────────────────────────── */
-document.getElementById("depthDown").addEventListener("click", () => adjust("depth", -1,  1, 16, depthVal));
-document.getElementById("depthUp"  ).addEventListener("click", () => adjust("depth", +1,  1, 16, depthVal));
+oriSel.addEventListener("change", () => chrome.storage.local.set({ orientation: oriSel.value }));
 
-/* ── Delay control (0–2000ms, step 50) ────────────────────────── */
-document.getElementById("delayDown").addEventListener("click", () => adjust("delay", -50,  0, 2000, delayVal));
-document.getElementById("delayUp"  ).addEventListener("click", () => adjust("delay", +50,  0, 2000, delayVal));
-
-function adjust(key, delta, min, max, el) {
-  const cur = parseInt(el.textContent) || 0;
-  const next = Math.min(max, Math.max(min, cur + delta));
-  el.textContent = next;
-  chrome.storage.local.set({ [key]: next });
-  // Notify content script of new settings
-  chrome.storage.local.set({ settingsUpdated: Date.now() });
+modeAuto.addEventListener("click", () => { setMode("autoplay");   chrome.storage.local.set({mode:"autoplay"}); });
+modeHl.addEventListener(  "click", () => { setMode("highlight");  chrome.storage.local.set({mode:"highlight"}); });
+function setMode(m){
+  modeAuto.classList.toggle("active", m==="autoplay");
+  modeHl.classList.toggle(  "active", m==="highlight");
 }
 
-/* ── Live move log (poll storage every 800 ms while popup open) ── */
+cropBtn.addEventListener("click", () => {
+  chrome.storage.local.set({ cropDraw: true, cropResult: null });
+  window.close();
+});
+cropClr.addEventListener("click", () => {
+  chrome.storage.local.set({ cropBox: null });
+  setCropUI(false);
+});
+function setCropUI(has){
+  cropBtn.textContent = has ? "✅  Crop box active" : "✏️  Draw board crop box";
+  cropBtn.classList.toggle("set", has);
+  cropClr.style.display = has ? "block" : "none";
+}
+
 setInterval(() => {
-  chrome.storage.local.get(["moveLog", "active"], (res) => {
-    renderLog(res.moveLog ?? []);
-    if (toggle.checked !== !!res.active) {
-      toggle.checked = !!res.active;
-      setStatus(!!res.active);
+  chrome.storage.local.get(["active","status","moveLog","cropBox","cropResult","mode"], (r) => {
+    if (toggle.checked !== !!r.active) toggle.checked = !!r.active;
+    if (r.status) setStatus(r.status, !!r.active);
+    renderLog(r.moveLog ?? []);
+    setCropUI(!!r.cropBox);
+    setMode(r.mode ?? "autoplay");
+    if (r.cropResult === "too_small") {
+      chrome.storage.local.set({cropResult:null});
+      setStatus("⚠️ Box too small — try again", false);
     }
   });
-}, 800);
+}, 700);
+
+function setStatus(msg, active) {
+  statusB.textContent = msg;
+  statusB.className = "status-bar";
+  if (msg.startsWith("❌")||msg.startsWith("⚠️")) statusB.classList.add("warn");
+  else if (active) statusB.classList.add("live");
+}
 
 function renderLog(moves) {
   if (!moves.length) {
-    logEl.innerHTML = '<div class="log-entry" style="color:#333">— no moves yet —</div>';
+    logEl.innerHTML = '<div class="log-entry" style="color:#2a2a2a">— no moves yet —</div>';
     return;
   }
-  logEl.innerHTML = moves
-    .slice(-6)
-    .reverse()
-    .map((m, i) => `<div class="log-entry${i === 0 ? " new" : ""}">${m}</div>`)
-    .join("");
+  logEl.innerHTML = moves.slice(-6).reverse()
+    .map((m,i) => `<div class="log-entry${i===0?" fresh":""}">${m}</div>`).join("");
 }
