@@ -1,93 +1,84 @@
-/* popup.js v6 */
-const toggle   = document.getElementById("toggle");
-const statusB  = document.getElementById("statusBar");
-const depthV   = document.getElementById("depthV");
-const delayV   = document.getElementById("delayV");
-const oriSel   = document.getElementById("oriSel");
-const cropBtn  = document.getElementById("cropBtn");
-const cropClr  = document.getElementById("cropClear");
-const logEl    = document.getElementById("logEl");
-const modeAuto = document.getElementById("modeAutoplay");
-const modeHl   = document.getElementById("modeHighlight");
+const tog       = document.getElementById("tog");
+const bulletTog = document.getElementById("bulletTog");
+const sb        = document.getElementById("sb");
+const dV        = document.getElementById("dV");
+const lV        = document.getElementById("lV");
+const ori       = document.getElementById("ori");
+const log       = document.getElementById("log");
+const mA        = document.getElementById("mAuto");
+const mH        = document.getElementById("mHL");
+const cBtn      = document.getElementById("cropBtn");
+const cClr      = document.getElementById("cropClr");
 
 chrome.storage.local.get(
-  ["active","depth","delay","orientation","cropBox","moveLog","status","mode"],
+  ["active","bulletMode","depth","delay","orientation","cropBox","moveLog","status","mode"],
   (r) => {
-    toggle.checked       = !!r.active;
-    depthV.textContent   = r.depth ?? 8;
-    delayV.textContent   = r.delay       ?? 100;
-    oriSel.value         = r.orientation ?? "auto";
-    setMode(r.mode       ?? "autoplay");
-    renderLog(r.moveLog  ?? []);
-    setStatus(r.status   ?? (r.active ? "🟢 Watching…" : "⚫ Inactive"), !!r.active);
-    setCropUI(!!r.cropBox);
+    tog.checked       = !!r.active;
+    bulletTog.checked = !!r.bulletMode;
+    dV.textContent    = r.depth ?? 10;
+    lV.textContent    = r.delay ?? 50;
+    ori.value         = r.orientation ?? "auto";
+    setMode(r.mode ?? "autoplay");
+    renderLog(r.moveLog ?? []);
+    setSt(r.status ?? (r.active ? "🟢 Watching…" : "⚫ Inactive"), !!r.active);
+    setCrop(!!r.cropBox);
   }
 );
 
-toggle.addEventListener("change", () => {
-  const on = toggle.checked;
+tog.addEventListener("change", () => {
+  const on = tog.checked;
   chrome.storage.local.set({ active: on });
-  if (!on) { chrome.storage.local.set({ moveLog:[], status:"⚫ Inactive" }); setStatus("⚫ Inactive",false); }
+  if (!on) chrome.storage.local.set({ moveLog:[], status:"⚫ Inactive" });
+  sendMsg({ action:"toggleActive", value:on });
+  setSt(on ? "🟢 Watching…" : "⚫ Inactive", on);
 });
 
-document.getElementById("dD").onclick = () => adj("depth", -1,  1, 16, depthV);
-document.getElementById("dU").onclick = () => adj("depth", +1,  1, 16, depthV);
-document.getElementById("lD").onclick = () => adj("delay",-50,  0,2000,delayV);
-document.getElementById("lU").onclick = () => adj("delay",+50,  0,2000,delayV);
-function adj(key,delta,min,max,el){
-  const next=Math.min(max,Math.max(min,parseInt(el.textContent)+delta));
-  el.textContent=next; chrome.storage.local.set({[key]:next});
-}
-
-oriSel.addEventListener("change", () => chrome.storage.local.set({ orientation: oriSel.value }));
-
-modeAuto.addEventListener("click", () => { setMode("autoplay");   chrome.storage.local.set({mode:"autoplay"}); });
-modeHl.addEventListener(  "click", () => { setMode("highlight");  chrome.storage.local.set({mode:"highlight"}); });
-function setMode(m){
-  modeAuto.classList.toggle("active", m==="autoplay");
-  modeHl.classList.toggle(  "active", m==="highlight");
-}
-
-cropBtn.addEventListener("click", () => {
-  chrome.storage.local.set({ cropDraw: true, cropResult: null });
-  window.close();
+bulletTog.addEventListener("change", () => {
+  chrome.storage.local.set({ bulletMode: bulletTog.checked });
+  sendMsg({ action:"setBulletMode", value: bulletTog.checked });
 });
-cropClr.addEventListener("click", () => {
-  chrome.storage.local.set({ cropBox: null });
-  setCropUI(false);
-});
-function setCropUI(has){
-  cropBtn.textContent = has ? "✅  Crop box active" : "✏️  Draw board crop box";
-  cropBtn.classList.toggle("set", has);
-  cropClr.style.display = has ? "block" : "none";
+
+mA.addEventListener("click", () => { setMode("autoplay");  chrome.storage.local.set({mode:"autoplay"});  sendMsg({action:"setMode",value:"autoplay"}); });
+mH.addEventListener("click", () => { setMode("highlight"); chrome.storage.local.set({mode:"highlight"}); sendMsg({action:"setMode",value:"highlight"}); });
+function setMode(m) { mA.classList.toggle("on",m==="autoplay"); mH.classList.toggle("on",m==="highlight"); }
+
+document.getElementById("dD").onclick = () => adj("depth",-1,1,16,dV);
+document.getElementById("dU").onclick = () => adj("depth",+1,1,16,dV);
+document.getElementById("lD").onclick = () => adj("delay",-10,0,2000,lV);
+document.getElementById("lU").onclick = () => adj("delay",+10,0,2000,lV);
+function adj(k,d,mn,mx,el){
+  const v=Math.min(mx,Math.max(mn,parseInt(el.textContent)+d));
+  el.textContent=v; chrome.storage.local.set({[k]:v});
+  sendMsg({action:"setDepth",value:v});
 }
 
-setInterval(() => {
-  chrome.storage.local.get(["active","status","moveLog","cropBox","cropResult","mode"], (r) => {
-    if (toggle.checked !== !!r.active) toggle.checked = !!r.active;
-    if (r.status) setStatus(r.status, !!r.active);
-    renderLog(r.moveLog ?? []);
-    setCropUI(!!r.cropBox);
-    setMode(r.mode ?? "autoplay");
-    if (r.cropResult === "too_small") {
-      chrome.storage.local.set({cropResult:null});
-      setStatus("⚠️ Box too small — try again", false);
-    }
+ori.addEventListener("change",()=>chrome.storage.local.set({orientation:ori.value}));
+
+cBtn.addEventListener("click",()=>{ chrome.storage.local.set({cropDraw:true,cropResult:null}); window.close(); });
+cClr.addEventListener("click",()=>{ chrome.storage.local.set({cropBox:null}); setCrop(false); });
+function setCrop(h){ cBtn.textContent=h?"✅ Crop active":"✏️ Draw crop box"; cBtn.classList.toggle("set",h); cClr.style.display=h?"block":"none"; }
+
+function sendMsg(msg){
+  chrome.tabs.query({active:true,currentWindow:true},tabs=>{
+    if(tabs[0]?.id) chrome.tabs.sendMessage(tabs[0].id,msg).catch(()=>{});
   });
-}, 700);
-
-function setStatus(msg, active) {
-  statusB.textContent = msg;
-  statusB.className = "status-bar";
-  if (msg.startsWith("❌")||msg.startsWith("⚠️")) statusB.classList.add("warn");
-  else if (active) statusB.classList.add("live");
 }
 
-function renderLog(moves) {
-  if (!moves.length) {
-    logEl.innerHTML = '<div class="log-entry" style="color:#2a2a2a">— no moves yet —</div>';
-    return;
-  }
-  logEl.innerHTML = moves.slice(-6).reverse()
-    .map((m,i) => `<div class="log-entry${i===0?" fresh":""}">${m}</div>`).join("");
+setInterval(()=>{
+  chrome.storage.local.get(["active","status","moveLog","cropBox"],r=>{
+    if(tog.checked!==!!r.active) tog.checked=!!r.active;
+    if(r.status) setSt(r.status,!!r.active);
+    renderLog(r.moveLog??[]);
+    setCrop(!!r.cropBox);
+  });
+},600);
+
+function setSt(msg,on){
+  sb.textContent=msg; sb.className="status-bar";
+  if(msg.startsWith("❌")||msg.startsWith("⚠️")) sb.classList.add("warn");
+  else if(on) sb.classList.add("live");
+}
+function renderLog(moves){
+  if(!moves.length){log.innerHTML='<div class="log-e" style="color:#222">— no moves yet —</div>';return;}
+  log.innerHTML=moves.slice(-6).reverse().map((m,i)=>`<div class="log-e${i===0?" new":""}">${m}</div>`).join("");
 }
