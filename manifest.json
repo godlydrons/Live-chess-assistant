@@ -1,20 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Lichess Engine Pilot",
-  "version": "1.0.0",
-  "description": "Auto-plays the engine's best move on Lichess with rapid, precise execution.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "version": "9.0.0",
+  "description": "Local Stockfish 19 ASM.js Engine — Zero CSP, Android & Desktop.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "offscreen"
+  ],
   "host_permissions": [
     "https://lichess.org/*",
     "https://stockfish.online/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_icon": {
-      "16":  "icon.png",
-      "48":  "icon.png",
-      "128": "icon.png"
-    }
+    "default_icon": { "128": "icon.png" }
   },
   "content_scripts": [
     {
@@ -23,9 +26,8 @@
       "run_at": "document_idle"
     }
   ],
-  "icons": {
-    "16":  "icon.png",
-    "48":  "icon.png",
-    "128": "icon.png"
-  }
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "icons": { "128": "icon.png" }
 }
