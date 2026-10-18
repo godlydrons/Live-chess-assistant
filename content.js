@@ -1,523 +1,470 @@
-/**
- * Lichess Engine Pilot — content.js v11
- *
- * THE ACTUAL BUG (finally crystal clear):
- *
- * WS fires for every move. The "uci" field in the WS message
- * IS the move that was just played. We can determine whose move
- * it was by checking if it was our piece that moved.
- *
- * But simpler and more reliable: use PLY PARITY.
- *
- * We are Black. Our moves happen on even ply (2,4,6...).
- * After OUR move: ply is even → next turn is White (opponent).
- * After OPPONENT move: ply is odd → next turn is Black (us).
- *
- * So: fire engine only when (ply is ODD and we are Black)
- *                        or (ply is EVEN and we are White)
- *
- * This means: fire when it just became OUR turn.
- * = fire when the OPPONENT just moved.
- *
- * Previous bug: was computing "whose turn is it now" correctly,
- * but the WS event for OUR move also triggered the engine
- * because the guard "if (!ourTurn) return" was checking the
- * turn AFTER the move, but the FEN used was from BEFORE the move.
- *
- * Real issue: Lichess WS "move" message for your OWN move:
- *   - arrives AFTER you tap the board
- *   - ply increments, so now it looks like opponent's turn
- *   - but the FEN in the message is the position AFTER your move
- *   - engine runs on that FEN and suggests moves for opponent
- *
- * CORRECT LOGIC:
- * - Track the last FEN we suggested for
- * - When WS fires: check if ply parity matches "opponent just moved"
- * - Use the FEN from the WS message directly (it's always current)
- * - Never re-suggest for same FEN
+/**VAMOS
  */
 (function () {
   "use strict";
 
   const PIECE_FEN = {
-    "white king":"K","white queen":"Q","white rook":"R",
-    "white bishop":"B","white knight":"N","white pawn":"P",
-    "black king":"k","black queen":"q","black rook":"r",
-    "black bishop":"b","black knight":"n","black pawn":"p",
+    "white king": "K", "white queen": "Q", "white rook": "R", "white bishop": "B", "white knight": "N", "white pawn": "P",
+    "black king": "k", "black queen": "q", "black rook": "r", "black bishop": "b", "black knight": "n", "black pawn": "p"
   };
 
-  /* ── Config ──────────────────────────────────────────────────── */
-  let cfg = { depth:8, delay:80, orientation:"auto", cropBox:null, mode:"autoplay" };
-  chrome.storage.local.get(["depth","delay","orientation","cropBox","mode"], (r) => {
-    if (r.depth       != null) cfg.depth       = r.depth;
-    if (r.delay       != null) cfg.delay       = r.delay;
+  let cfg = { depth: 10, delay: 40, orientation: "auto", mode: "autoplay", bulletMode: false };
+  let active = false;
+  let busy = false;
+  let lastOurTurnBoard = null;
+  let lastPonderBoard = null;
+  let prevGrid = null;
+  let lastDetectedTurn = "w";
+  let queuedResponse = null;
+
+  chrome.storage.local.get(["depth", "delay", "orientation", "mode", "bulletMode", "active"], (r) => {
+    if (r.depth != null) cfg.depth = r.depth;
+    if (r.delay != null) cfg.delay = r.delay;
     if (r.orientation != null) cfg.orientation = r.orientation;
-    if (r.cropBox     != null) cfg.cropBox     = r.cropBox;
-    if (r.mode        != null) cfg.mode        = r.mode;
-  });
-  chrome.storage.onChanged.addListener((ch) => {
-    if (ch.depth)       cfg.depth       = ch.depth.newValue;
-    if (ch.delay)       cfg.delay       = ch.delay.newValue;
-    if (ch.orientation) cfg.orientation = ch.orientation.newValue;
-    if (ch.cropBox)     cfg.cropBox     = ch.cropBox.newValue;
-    if (ch.mode)        cfg.mode        = ch.mode.newValue;
-    if (ch.cropDraw?.newValue) launchCropOverlay();
-  });
-
-  /* ── Inject WS sniffer at document_start ────────────────────── */
-  const injectScript = document.createElement("script");
-  injectScript.textContent = `
-(function(){
-  if (window.__epInjected) return;
-  window.__epInjected = true;
-  window.__epColor = null;
-
-  function detectColor() {
-    try {
-      for (const s of document.querySelectorAll("script:not([src])")) {
-        const m = s.textContent.match(/"color"\s*:\s*"(white|black)"/);
-        if (m) { window.__epColor = m[1]; return; }
-      }
-    } catch(_) {}
-  }
-  detectColor();
-  document.addEventListener("DOMContentLoaded", detectColor);
-  setTimeout(detectColor, 2000);
-
-  const _WS = window.WebSocket;
-  window.WebSocket = function(...a) {
-    const ws = new _WS(...a);
-    ws.addEventListener("message", function(e) {
-      try {
-        const d = JSON.parse(e.data);
-        if (!d) return;
-        if (d.t === "move" && d.d) {
-          window.dispatchEvent(new CustomEvent("__ep_move", {
-            detail: {
-              fen: d.d.fen || null,
-              ply: d.d.ply,
-              uci: d.d.uci || "",
-            }
-          }));
-        }
-        if (d.t === "state" && d.d && d.d.moves !== undefined) {
-          const moves = (d.d.moves||"").trim().split(/\s+/).filter(Boolean);
-          window.dispatchEvent(new CustomEvent("__ep_move", {
-            detail: { fen: null, ply: moves.length, uci: moves.at(-1)||"" }
-          }));
-        }
-      } catch(_) {}
-    });
-    return ws;
-  };
-  Object.assign(window.WebSocket, _WS);
-})();
-  `;
-  (document.head || document.documentElement).prepend(injectScript);
-  injectScript.remove();
-
-  /* ── State ───────────────────────────────────────────────────── */
-  let active = false, busy = false;
-  let lastHandledFen = null, playerColor = null;
-  let wsReceived = false;
-  const isPuzzle = /\/(training|puzzle)/.test(location.pathname);
-
-  chrome.storage.local.get(["active"], (r) => {
+    if (r.mode != null) cfg.mode = r.mode;
+    if (r.bulletMode != null) cfg.bulletMode = r.bulletMode;
     active = !!r.active;
-    ping("status", active ? "🟢 Watching…" : "⚫ Inactive");
-    if (active) setTimeout(pollCheck, 1200);
   });
+
   chrome.storage.onChanged.addListener((ch) => {
-    if (ch.active == null) return;
-    active = ch.active.newValue;
-    if (!active) {
-      ping("status","⚫ Inactive");
-      clearHighlights(); busy = false; lastHandledFen = null;
-    } else {
-      ping("status","🟢 Watching…");
-      playerColor = null; wsReceived = false;
-      setTimeout(pollCheck, 800);
-    }
+    if (ch.depth) cfg.depth = ch.depth.newValue;
+    if (ch.delay) cfg.delay = ch.delay.newValue;
+    if (ch.orientation) cfg.orientation = ch.orientation.newValue;
+    if (ch.mode) cfg.mode = ch.mode.newValue;
+    if (ch.bulletMode) cfg.bulletMode = ch.bulletMode.newValue;
   });
 
-  /* ══════════════════════════════════════════════════════════════
-     REACTIVE PATH
+  chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+    if (msg.action === "toggleActive") {
+      active = msg.value;
+      busy = false;
+      lastOurTurnBoard = null;
+      lastPonderBoard = null;
+      queuedResponse = null;
+      if (!active) clearHighlights();
+    }
+    if (msg.action === "setMode") cfg.mode = msg.value;
+    if (msg.action === "setBulletMode") cfg.bulletMode = msg.value;
+    if (msg.action === "setDepth") cfg.depth = msg.value;
+    sendResponse({ ok: true });
+    return true;
+  });
 
-     KEY INSIGHT:
-     The WS "move" message fires for EVERY move.
-     d.ply = total moves played INCLUDING the one just made.
+  function getOurColor() {
+    if (cfg.orientation === "white" || cfg.orientation === "black") return cfg.orientation;
+    const wrap = document.querySelector(".cg-wrap");
+    return wrap?.classList.contains("orientation-black") ? "black" : "white";
+  }
 
-     We are e.g. Black.
-     - White plays e4  → ply becomes 1 (odd)  → FEN has Black to move  → OUR TURN ✓
-     - We play e5      → ply becomes 2 (even) → FEN has White to move  → NOT OUR TURN ✗
-     - White plays Nf3 → ply becomes 3 (odd)  → FEN has Black to move  → OUR TURN ✓
-     - We play Nc6     → ply becomes 4 (even) → FEN has White to move  → NOT OUR TURN ✗
+  function getOpponentRating() {
+    try {
+      const ourColor = getOurColor();
+      const oppSelector = ourColor === "white" ? ".player.top rating, .ruser-top rating" : ".player.bottom rating, .ruser-bottom rating";
+      const ratingEl = document.querySelector(oppSelector) || document.querySelector("rating");
+      if (ratingEl) {
+        const val = parseInt(ratingEl.textContent.replace(/\D/g, ""), 10);
+        if (!isNaN(val) && val > 100) return val;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 
-     Rule for Black:  fire when ply is ODD  (opponent White just moved)
-     Rule for White:  fire when ply is EVEN (opponent Black just moved)
+  function detectTurn(grid, lastMoveSquares, ori) {
+    // 1. Lichess live move list (<kwdb>)
+    const moveNodes = document.querySelectorAll("kwdb, rm6 kwdb, l4x kwdb");
+    if (moveNodes.length > 0) {
+      return moveNodes.length % 2 === 0 ? "w" : "b";
+    }
 
-     The FEN in the WS message is the position AFTER the move just played.
-     So when ply is odd (White just moved), FEN shows Black to move → correct.
-  ══════════════════════════════════════════════════════════════ */
-  window.addEventListener("__ep_move", async (e) => {
-    if (!active) return;
-    wsReceived = true;
+    // 2. Grid diff from previous frame
+    if (prevGrid) {
+      let whiteChanged = false;
+      let blackChanged = false;
+      for (let r = 0; r < 8; r++) {
+        for (let f = 0; f < 8; f++) {
+          const oldP = prevGrid[r][f];
+          const newP = grid[r][f];
+          if (oldP !== newP && newP) {
+            if (newP === newP.toUpperCase()) whiteChanged = true;
+            else blackChanged = true;
+          }
+        }
+      }
+      if (whiteChanged && !blackChanged) return "b";
+      if (blackChanged && !whiteChanged) return "w";
+    }
 
-    const { fen, ply, uci } = e.detail;
-    if (!playerColor) playerColor = getPlayerColor();
-    if (!playerColor) {
-      setTimeout(() => { playerColor = getPlayerColor(); }, 500);
+    // 3. Running clock
+    if (document.querySelector(".rclock-bottom.running")) return ori === "white" ? "w" : "b";
+    if (document.querySelector(".rclock-top.running")) return ori === "white" ? "b" : "w";
+
+    // 4. Occupied square.last-move (for Puzzle Streak / Racer initial position)
+    for (const lm of lastMoveSquares) {
+      const p = grid[lm.r]?.[lm.f];
+      if (p) {
+        return p === p.toUpperCase() ? "b" : "w";
+      }
+    }
+
+    return lastDetectedTurn || "w";
+  }
+
+  function scrapeBoardState() {
+    const boardEl = document.querySelector("cg-board");
+    if (!boardEl) return null;
+    const rect = boardEl.getBoundingClientRect();
+    if (rect.width < 50) return null;
+    if (boardEl.querySelector("piece.anim")) return null;
+
+    const ori = getOurColor();
+    const sqW = rect.width / 8;
+    const sqH = rect.height / 8;
+    const grid = Array.from({ length: 8 }, () => Array(8).fill(null));
+    const lastMoveSquares = [];
+    let placed = 0;
+
+    function coordsFromStyle(el) {
+      const style = el.getAttribute("style") || "";
+      const tf = style.match(/translate(?:3d)?\(\s*([-\d.]+)px(?:,\s*([-\d.]+)px)?/);
+      if (!tf) return null;
+      const x = parseFloat(tf[1]);
+      const y = tf[2] !== undefined ? parseFloat(tf[2]) : 0;
+      const col = Math.max(0, Math.min(7, Math.round(x / sqW)));
+      const row = Math.max(0, Math.min(7, Math.round(y / sqH)));
+      const file = ori === "white" ? col : 7 - col;
+      const rank = ori === "white" ? 7 - row : row;
+      return { r: 7 - rank, f: file };
+    }
+
+    for (const sq of boardEl.querySelectorAll("square.last-move")) {
+      const c = coordsFromStyle(sq);
+      if (c) lastMoveSquares.push(c);
+    }
+
+    for (const p of boardEl.querySelectorAll("piece")) {
+      if (p.classList.contains("ghost") || p.classList.contains("dragging") || p.classList.contains("fading")) continue;
+      const cleanClass = p.className.replace(/\b(anim|fading|selected|check)\b/g, "").trim().replace(/\s+/g, " ");
+      const letter = PIECE_FEN[cleanClass];
+      if (!letter) continue;
+      const c = coordsFromStyle(p);
+      if (!c) continue;
+      grid[c.r][c.f] = letter;
+      placed++;
+    }
+
+    if (placed < 2) return null;
+
+    let rows = "";
+    for (let r = 0; r < 8; r++) {
+      let empty = 0;
+      for (let f = 0; f < 8; f++) {
+        const p = grid[r][f];
+        if (p) {
+          if (empty) { rows += empty; empty = 0; }
+          rows += p;
+        } else {
+          empty++;
+        }
+      }
+      if (empty) rows += empty;
+      if (r < 7) rows += "/";
+    }
+
+    const prevRows = prevGrid ? prevGrid.map(r => r.map(c => c || ".").join("")).join("/") : null;
+    const curRows = grid.map(r => r.map(c => c || ".").join("")).join("/");
+    const detectedTurn = detectTurn(grid, lastMoveSquares, ori);
+
+    if (curRows !== prevRows) {
+      prevGrid = grid;
+      lastDetectedTurn = detectedTurn;
+    }
+
+    let cas = "";
+    if (grid[7][4] === "K") { if (grid[7][7] === "R") cas += "K"; if (grid[7][0] === "R") cas += "Q"; }
+    if (grid[0][4] === "k") { if (grid[0][7] === "r") cas += "k"; if (grid[0][0] === "r") cas += "q"; }
+
+    return {
+      rows,
+      fen: `${rows} ${detectedTurn} ${cas || "-"} - 0 1`,
+      turn: detectedTurn,
+      ori
+    };
+  }
+
+  function applyUciToRows(rows, uci) {
+    try {
+      const b = rows.split("/").map(r => {
+        const arr = [];
+        for (const ch of r) {
+          if (/\d/.test(ch)) for (let i = 0; i < parseInt(ch, 10); i++) arr.push(null);
+          else arr.push(ch);
+        }
+        return arr;
+      });
+      const f1 = uci.charCodeAt(0) - 97, r1 = 8 - parseInt(uci[1], 10);
+      const f2 = uci.charCodeAt(2) - 97, r2 = 8 - parseInt(uci[3], 10);
+      const piece = b[r1][f1];
+      if (!piece) return null;
+      b[r1][f1] = null;
+      b[r2][f2] = uci[4] ? (piece === piece.toUpperCase() ? uci[4].toUpperCase() : uci[4].toLowerCase()) : piece;
+
+      return b.map(row => {
+        let s = "", e = 0;
+        for (const cell of row) {
+          if (cell) { if (e) { s += e; e = 0; } s += cell; }
+          else e++;
+        }
+        if (e) s += e;
+        return s;
+      }).join("/");
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function requestAnalysis(fen, options, oppRating) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        action: "analyze",
+        fen,
+        depth: options.depth,
+        movetime: options.movetime,
+        opponentRating: oppRating
+      }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (res?.ok && res.uci) resolve(res);
+        else reject(new Error(res?.error || "Engine error"));
+      });
+    });
+  }
+
+  async function tick() {
+    if (!active || busy) return;
+    const state = scrapeBoardState();
+    if (!state) return;
+
+    const ourColorChar = state.ori[0];
+    const isOurTurn = state.turn === ourColorChar;
+
+    // 1. OPPONENT'S TURN -> PONDER / QUEUE MODE
+    if (!isOurTurn) {
+      if (state.rows === lastPonderBoard) return;
+      lastPonderBoard = state.rows;
+      ping("status", "🧠 Pondering opponent...");
+
+      busy = true;
+      try {
+        const oppRes = await requestAnalysis(state.fen, { depth: Math.min(cfg.depth, 10), movetime: 300 }, null);
+        if (oppRes?.uci && oppRes?.ponder) {
+          const expectedRowsAfterOpp = applyUciToRows(state.rows, oppRes.uci);
+          if (expectedRowsAfterOpp) {
+            queuedResponse = {
+              expectedRows: expectedRowsAfterOpp,
+              ourMove: oppRes.ponder,
+              eval: oppRes.eval || "0.00"
+            };
+            ping("status", `🎯 Queued: ${oppRes.ponder} (if ${oppRes.uci})`);
+          }
+        }
+      } catch (_) {
+      } finally {
+        busy = false;
+      }
       return;
     }
 
-    /*
-     * After this WS move, whose turn is it?
-     * The FEN's active color tells us directly.
-     * We can also derive from ply:
-     *   odd ply  → White just moved → Black's turn now
-     *   even ply → Black just moved → White's turn now
-     */
-    const turnInFen = fen ? fen.split(" ")[1] : ((ply % 2 === 1) ? "b" : "w");
-
-    // Is it NOW our turn (after this move landed)?
-    const ourTurn = (turnInFen === "w" && playerColor === "white") ||
-                    (turnInFen === "b" && playerColor === "black");
-
-    log(`WS ply=${ply} uci=${uci} turnInFen=${turnInFen} playerColor=${playerColor} ourTurn=${ourTurn}`);
-    ping("status", `${ourTurn ? "🎯 Our turn" : "⏳ Opponent"} [${playerColor}/${turnInFen}]`);
-
-    if (!ourTurn || busy) return;
-    if (!fen) { log("No FEN in WS"); return; }
-    if (fen === lastHandledFen) return;
-
-    // This FEN already has the correct turn (opponent just moved, it's our turn)
-    await go(fen);
-  });
-
-  /* ── Poll path: first move as White + puzzles ────────────────── */
-  function pollCheck() {
-    if (!active || busy) return;
-    if (!isPuzzle && wsReceived) return;
-    if (!playerColor) playerColor = getPlayerColor();
-
-    const state = getBoardState();
-    if (!state) { ping("status","⚠️ Board not found"); return; }
-    const { fen, turnInFen } = state;
-    const ourTurn = (turnInFen === "w" && playerColor === "white") ||
-                    (turnInFen === "b" && playerColor === "black");
-
-    ping("status", `${ourTurn ? "🎯 Our turn" : "⏳ Opponent"} [${playerColor||"?"}/${turnInFen}]`);
-    if (!ourTurn || fen === lastHandledFen) return;
-    go(fen);
-  }
-  setInterval(pollCheck, 500);
-
-  /* ── Engine handler ──────────────────────────────────────────── */
-  async function go(fen) {
-    if (busy) return;
+    // 2. OUR TURN
+    if (state.rows === lastOurTurnBoard) return;
     busy = true;
-    lastHandledFen = fen;
+    lastOurTurnBoard = state.rows;
+
     try {
-      ping("status","🔍 Engine…");
-      const uci = await getBestMove(fen);
-      if (!uci) throw new Error("No move");
-      ping("status","♟ " + uci);
-      log("Best: " + uci + " | fen: " + fen.slice(0,40));
-      const ori = getOrientation();
-      drawHighlight(uci, ori);
-      if (cfg.mode === "autoplay") {
-        await sleep(cfg.delay);
-        playMove(uci, ori);
+      let uciToPlay = null;
+      let ponderToDraw = null;
+      let moveEval = "0.00";
+      let moveSource = "asm-local";
+
+      if (queuedResponse && queuedResponse.expectedRows === state.rows) {
+        uciToPlay = queuedResponse.ourMove;
+        moveEval = queuedResponse.eval;
+        moveSource = "queue⚡";
+        queuedResponse = null;
+      } else {
+        queuedResponse = null;
+        const oppRating = getOpponentRating();
+        ping("status", oppRating ? `⚡ Calc (vs ${oppRating})...` : "⚡ Calculating...");
+
+        const options = cfg.bulletMode
+          ? { movetime: 150, depth: 8 }
+          : { depth: cfg.depth };
+
+        const res = await requestAnalysis(state.fen, options, oppRating);
+        uciToPlay = res.uci;
+        ponderToDraw = res.ponder;
+        moveEval = res.eval || "0.00";
+        moveSource = res.source || "asm-local";
       }
-      logMove(uci, fen);
-    } catch(e) {
-      ping("status","❌ " + e.message);
-      log("Error: " + e.message);
-      lastHandledFen = null;
+
+      if (!uciToPlay) throw new Error("No move found");
+
+      ping("status", `♟ ${uciToPlay} (${moveEval}) [${moveSource}]`);
+      drawBoardOverlay(uciToPlay, ponderToDraw, state.ori);
+      logMove(uciToPlay, moveEval);
+
+      if (cfg.mode === "autoplay") {
+        await sleep(Math.max(15, cfg.delay));
+        await playMove(uciToPlay, state.ori);
+      }
+    } catch (e) {
+      ping("status", "❌ " + e.message);
+      lastOurTurnBoard = null;
     } finally {
       busy = false;
     }
   }
 
-  /* ── Board state (poll path) ─────────────────────────────────── */
-  function getBoardState() {
+  function clearHighlights() {
+    const existing = document.getElementById("ep-svg-overlay");
+    if (existing) existing.remove();
+  }
+
+  function drawBoardOverlay(bestUci, ponderUci, ori) {
     const boardEl = document.querySelector("cg-board");
-    if (!boardEl) return null;
-    const rect = boardEl.getBoundingClientRect();
-    if (rect.width < 50) return null;
-    const ply = getDomPly();
-    const turnInFen = (ply % 2 === 0) ? "w" : "b";
-    const fen = scrapeFen(turnInFen);
-    if (!fen) return null;
-    return { fen, turnInFen };
+    if (!boardEl) return;
+
+    let svg = document.getElementById("ep-svg-overlay");
+    if (!svg || !boardEl.contains(svg)) {
+      svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.id = "ep-svg-overlay";
+      svg.setAttribute("viewBox", "0 0 800 800");
+      Object.assign(svg.style, {
+        position: "absolute",
+        inset: "0",
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        zIndex: "99"
+      });
+      boardEl.appendChild(svg);
+    }
+
+    function sqCenterSvg(sq) {
+      const f = sq.charCodeAt(0) - 97;
+      const rk = parseInt(sq[1], 10) - 1;
+      const col = ori === "white" ? f : 7 - f;
+      const row = ori === "white" ? 7 - rk : rk;
+      return { x: col * 100 + 50, y: row * 100 + 50, rx: col * 100, ry: row * 100 };
+    }
+
+    function buildArrow(uci, color, markerId, opacity) {
+      if (!uci || uci.length < 4) return "";
+      const s = sqCenterSvg(uci.slice(0, 2));
+      const d = sqCenterSvg(uci.slice(2, 4));
+      const dx = d.x - s.x, dy = d.y - s.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ex = d.x - (dx / len) * 28;
+      const ey = d.y - (dy / len) * 28;
+      return `
+        <rect x="${s.rx}" y="${s.ry}" width="100" height="100" fill="${color}" fill-opacity="0.22" />
+        <rect x="${d.rx}" y="${d.ry}" width="100" height="100" fill="${color}" fill-opacity="0.32" />
+        <line x1="${s.x}" y1="${s.y}" x2="${ex}" y2="${ey}"
+              stroke="${color}" stroke-opacity="${opacity}" stroke-width="14"
+              stroke-linecap="round" marker-end="url(#${markerId})" />
+      `;
+    }
+
+    svg.innerHTML = `
+      <defs>
+        <marker id="ep-g" markerWidth="3.5" markerHeight="3.5" refX="1.8" refY="1.75" orient="auto">
+          <polygon points="0,0 3.5,1.75 0,3.5" fill="#14c83c" />
+        </marker>
+        <marker id="ep-b" markerWidth="3.5" markerHeight="3.5" refX="1.8" refY="1.75" orient="auto">
+          <polygon points="0,0 3.5,1.75 0,3.5" fill="#38bdf8" />
+        </marker>
+      </defs>
+      ${ponderUci ? buildArrow(ponderUci, "#38bdf8", "ep-b", "0.55") : ""}
+      ${buildArrow(bestUci, "#14c83c", "ep-g", "0.9")}
+    `;
   }
 
-  /* ── Engine calls ────────────────────────────────────────────── */
-  async function getBestMove(fen) {
-    // Primary: Lichess cloud eval (fast, same-domain, no CORS)
-    try {
-      const res = await fetch(
-        `https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=1`,
-        { credentials: "omit" }
+  function sqScreenCenter(sq, ori) {
+    const b = document.querySelector("cg-board");
+    const r = b.getBoundingClientRect();
+    const sqW = r.width / 8, sqH = r.height / 8;
+    const f = sq.charCodeAt(0) - 97, rk = parseInt(sq[1], 10) - 1;
+    const col = ori === "white" ? f : 7 - f;
+    const row = ori === "white" ? 7 - rk : rk;
+    return { x: r.left + col * sqW + sqW / 2, y: r.top + row * sqH + sqH / 2 };
+  }
+
+  function firePointerAndMouse(el, type, x, y, buttons) {
+    const opts = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons
+    };
+    if (typeof PointerEvent !== "undefined") {
+      el.dispatchEvent(new PointerEvent(type.replace("mouse", "pointer"), { ...opts, pointerId: 1, isPrimary: true, pointerType: "mouse" }));
+    }
+    el.dispatchEvent(new MouseEvent(type, opts));
+  }
+
+  async function playMove(uci, ori) {
+    const board = document.querySelector("cg-board");
+    if (!board) return;
+    const src = sqScreenCenter(uci.slice(0, 2), ori);
+    const dst = sqScreenCenter(uci.slice(2, 4), ori);
+    const promo = uci[4] || null;
+
+    firePointerAndMouse(board, "mousedown", src.x, src.y, 1);
+    await sleep(20);
+    firePointerAndMouse(board, "mousemove", dst.x, dst.y, 1);
+    await sleep(20);
+    firePointerAndMouse(board, "mousedown", dst.x, dst.y, 1);
+    firePointerAndMouse(board, "mouseup", dst.x, dst.y, 0);
+
+    if (promo) {
+      await sleep(90);
+      const promoEl = document.querySelector(
+        `.promotion-choice [data-symbol="${promo.toUpperCase()}"], .promotion-choice .${promo}, .cg-promotion .${promo}`
       );
-      if (res.ok) {
-        const data = await res.json();
-        const move = data?.pvs?.[0]?.moves?.split(" ")?.[0];
-        if (move && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)) {
-          log("cloud-eval: " + move); return move;
-        }
+      if (promoEl) {
+        const pr = promoEl.getBoundingClientRect();
+        firePointerAndMouse(promoEl, "mousedown", pr.left + pr.width / 2, pr.top + pr.height / 2, 1);
+        firePointerAndMouse(promoEl, "mouseup", pr.left + pr.width / 2, pr.top + pr.height / 2, 0);
+        promoEl.click();
       }
-    } catch(e) { log("cloud-eval err: " + e.message); }
-
-    // Fallback: stockfish.online
-    try {
-      const res = await fetch(
-        `https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(fen)}&depth=${cfg.depth}`,
-        { credentials: "omit" }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          const m = (data.bestmove||"").match(/[a-h][1-8][a-h][1-8][qrbn]?/);
-          if (m) { log("stockfish: " + m[0]); return m[0]; }
-        }
-      }
-    } catch(e) { log("stockfish err: " + e.message); }
-
-    throw new Error("Engine unavailable");
-  }
-
-  /* ── Player color ────────────────────────────────────────────── */
-  function getPlayerColor() {
-    try {
-      const c = window.__epColor;
-      if (c === "white" || c === "black") return c;
-    } catch(_) {}
-    try {
-      for (const s of document.querySelectorAll("script:not([src])")) {
-        const m = s.textContent.match(/"color"\s*:\s*"(white|black)"/);
-        if (m) return m[1];
-      }
-    } catch(_) {}
-    return getOrientation();
-  }
-
-  function getOrientation() {
-    if (cfg.orientation !== "auto") return cfg.orientation;
-    const wrap = document.querySelector("cg-wrap,.cg-wrap");
-    return wrap?.classList.contains("orientation-black") ? "black" : "white";
-  }
-
-  /* ── DOM ply ─────────────────────────────────────────────────── */
-  function getDomPly() {
-    let max = 0;
-    for (const el of document.querySelectorAll("[data-ply]")) {
-      const v = parseInt(el.getAttribute("data-ply"));
-      if (!isNaN(v) && v > max) max = v;
     }
-    if (max > 0) return max;
-    for (const sel of ["l4x m2","rm6 m2",".tview2 move","move","kwdb"]) {
-      const n = document.querySelectorAll(sel).length;
-      if (n > 0) return n;
-    }
-    return 0;
   }
 
-  /* ── FEN scraper ─────────────────────────────────────────────── */
-  function scrapeFen(turn) {
-    const boardEl = document.querySelector("cg-board");
-    if (!boardEl) return null;
-    const rect = boardEl.getBoundingClientRect();
-    if (rect.width < 50) return null;
-    const ori = getOrientation();
-    const sqW = rect.width/8, sqH = rect.height/8;
-    const grid = Array.from({length:8},()=>Array(8).fill(null));
-    let placed = 0;
-    for (const p of boardEl.querySelectorAll("piece")) {
-      const letter = PIECE_FEN[p.className.trim()];
-      if (!letter) continue;
-      const tf = (p.getAttribute("style")||"").match(/translate\(\s*([\d.]+)px,\s*([\d.]+)px\s*\)/);
-      if (!tf) continue;
-      let col=Math.floor(parseFloat(tf[1])/sqW), row=Math.floor(parseFloat(tf[2])/sqH);
-      col=Math.max(0,Math.min(7,col)); row=Math.max(0,Math.min(7,row));
-      let file,rank;
-      if(ori==="white"){file=col;rank=7-row;}else{file=7-col;rank=row;}
-      grid[7-rank][file]=letter; placed++;
-    }
-    if (placed < 2) return null;
-    let rows="";
-    for(let r=0;r<8;r++){
-      let e=0;
-      for(let f=0;f<8;f++){
-        const p=grid[r][f];
-        if(p){if(e){rows+=e;e=0;}rows+=p;}else e++;
-      }
-      if(e)rows+=e; if(r<7)rows+="/";
-    }
-    const t = turn||(getDomPly()%2===0?"w":"b");
-    let cas="";
-    if(grid[7][4]==="K"){if(grid[7][7]==="R")cas+="K";if(grid[7][0]==="R")cas+="Q";}
-    if(grid[0][4]==="k"){if(grid[0][7]==="r")cas+="k";if(grid[0][0]==="r")cas+="q";}
-    return `${rows} ${t} ${cas||"-"} - 0 1`;
-  }
-
-  /* ── Highlight overlay ───────────────────────────────────────── */
-  let hlOverlay=null, hlTimer=null;
-
-  function clearHighlights(){
-    if(hlOverlay) hlOverlay.innerHTML="";
-    if(hlTimer){clearTimeout(hlTimer);hlTimer=null;}
-  }
-
-  function drawHighlight(uci, ori){
-    const boardEl=document.querySelector("cg-board");
-    if(!boardEl) return;
-    const rect=cfg.cropBox||boardEl.getBoundingClientRect();
-    if(!rect||rect.width<50) return;
-    if(!hlOverlay||!document.body.contains(hlOverlay)){
-      hlOverlay=document.createElement("div");
-      hlOverlay.id="ep-hl";
-      Object.assign(hlOverlay.style,{position:"fixed",pointerEvents:"none",
-        zIndex:"9999",overflow:"hidden"});
-      document.body.appendChild(hlOverlay);
-    }
-    Object.assign(hlOverlay.style,{left:rect.left+"px",top:rect.top+"px",
-      width:rect.width+"px",height:rect.height+"px"});
-    hlOverlay.innerHTML="";
-    const from=uci.slice(0,2),to=uci.slice(2,4);
-    const sqW=rect.width/8,sqH=rect.height/8;
-    function sqXY(s){
-      const f=s.charCodeAt(0)-97,rk=parseInt(s[1])-1;
-      let c,r;
-      if(ori==="white"){c=f;r=7-rk;}else{c=7-f;r=rk;}
-      return{x:c*sqW,y:r*sqH};
-    }
-    const sp=sqXY(from),dp=sqXY(to);
-    const se=document.createElement("div");
-    Object.assign(se.style,{position:"absolute",left:sp.x+"px",top:sp.y+"px",
-      width:sqW+"px",height:sqH+"px",background:"rgba(255,210,0,0.45)",
-      border:"2px solid rgba(255,170,0,0.9)",boxSizing:"border-box"});
-    const de=document.createElement("div");
-    Object.assign(de.style,{position:"absolute",left:dp.x+"px",top:dp.y+"px",
-      width:sqW+"px",height:sqH+"px",background:"rgba(20,200,60,0.4)",
-      border:"3px solid rgba(20,200,60,0.95)",boxSizing:"border-box"});
-    const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
-    Object.assign(svg.style,{position:"absolute",left:0,top:0,
-      width:"100%",height:"100%",overflow:"visible",pointerEvents:"none"});
-    const x1=sp.x+sqW/2,y1=sp.y+sqH/2,x2=dp.x+sqW/2,y2=dp.y+sqH/2;
-    const dx=x2-x1,dy=y2-y1,len=Math.sqrt(dx*dx+dy*dy)||1;
-    const ux=dx/len,uy=dy/len,sw=Math.max(3,sqW*0.13);
-    const ex=x2-ux*sqW*0.3,ey=y2-uy*sqH*0.3;
-    svg.innerHTML=`<defs><marker id="epa" markerWidth="4" markerHeight="4"
-      refX="2" refY="2" orient="auto">
-      <polygon points="0,0 4,2 0,4" fill="rgba(20,200,60,0.95)"/></marker></defs>
-      <line x1="${x1}" y1="${y1}" x2="${ex}" y2="${ey}"
-        stroke="rgba(20,200,60,0.85)" stroke-width="${sw}"
-        stroke-linecap="round" marker-end="url(#epa)"/>`;
-    hlOverlay.appendChild(se);hlOverlay.appendChild(de);hlOverlay.appendChild(svg);
-    if(hlTimer) clearTimeout(hlTimer);
-    hlTimer=setTimeout(clearHighlights,6000);
-  }
-
-  /* ── Move execution ──────────────────────────────────────────── */
-  function sqCenter(sq,ori){
-    const b=document.querySelector("cg-board");
-    const r=cfg.cropBox||b.getBoundingClientRect();
-    const sqW=r.width/8,sqH=r.height/8;
-    const f=sq.charCodeAt(0)-97,rk=parseInt(sq[1])-1;
-    let c,row;
-    if(ori==="white"){c=f;row=7-rk;}else{c=7-f;row=rk;}
-    return{x:r.left+c*sqW+sqW/2,y:r.top+row*sqH+sqH/2};
-  }
-
-  function ptr(type,x,y,btn){
-    return new PointerEvent(type,{bubbles:true,cancelable:true,
-      clientX:x,clientY:y,screenX:x,screenY:y,
-      pointerId:1,pointerType:"mouse",isPrimary:true,
-      button:btn>0?0:-1,buttons:btn,pressure:btn>0?0.5:0});
-  }
-
-  function playMove(uci,ori){
-    const from=uci.slice(0,2),to=uci.slice(2,4),promo=uci[4]||null;
-    const src=sqCenter(from,ori),dst=sqCenter(to,ori);
-    const board=document.querySelector("cg-board");
-    const sEl=document.elementFromPoint(src.x,src.y)||board;
-    const dEl=document.elementFromPoint(dst.x,dst.y)||board;
-    sEl.dispatchEvent(ptr("pointerover",src.x,src.y,0));
-    sEl.dispatchEvent(ptr("pointerdown",src.x,src.y,1));
-    board.dispatchEvent(ptr("pointermove",(src.x+dst.x)/2,(src.y+dst.y)/2,1));
-    board.dispatchEvent(ptr("pointermove",dst.x,dst.y,1));
-    dEl.dispatchEvent(ptr("pointerup",dst.x,dst.y,0));
-    setTimeout(()=>{
-      const s2=document.elementFromPoint(src.x,src.y)||board;
-      s2.dispatchEvent(new MouseEvent("mousedown",{bubbles:true,cancelable:true,clientX:src.x,clientY:src.y,button:0,buttons:1}));
-      s2.dispatchEvent(new MouseEvent("mouseup",  {bubbles:true,cancelable:true,clientX:src.x,clientY:src.y,button:0,buttons:0}));
-      s2.dispatchEvent(new MouseEvent("click",    {bubbles:true,cancelable:true,clientX:src.x,clientY:src.y,button:0,buttons:0}));
-      setTimeout(()=>{
-        const d2=document.elementFromPoint(dst.x,dst.y)||board;
-        d2.dispatchEvent(new MouseEvent("mousedown",{bubbles:true,cancelable:true,clientX:dst.x,clientY:dst.y,button:0,buttons:1}));
-        d2.dispatchEvent(new MouseEvent("mouseup",  {bubbles:true,cancelable:true,clientX:dst.x,clientY:dst.y,button:0,buttons:0}));
-        d2.dispatchEvent(new MouseEvent("click",    {bubbles:true,cancelable:true,clientX:dst.x,clientY:dst.y,button:0,buttons:0}));
-        if(promo) setTimeout(()=>handlePromotion(promo),200);
-      },80);
-    },100);
-  }
-
-  function handlePromotion(p){
-    for(const s of[`.promotion-choice [data-symbol="${p.toUpperCase()}"]`,
-      `.promotion-choice .${p}`,`.cg-promotion .${p}`]){
-      const el=document.querySelector(s);if(el){el.click();return;}
-    }
-    const fb=document.querySelector(".promotion-choice piece,.cg-promotion piece");
-    if(fb)fb.click();
-  }
-
-  /* ── Crop overlay ────────────────────────────────────────────── */
-  function launchCropOverlay(){
-    if(document.getElementById("ep-crop")) return;
-    const ov=Object.assign(document.createElement("div"),{id:"ep-crop"});
-    Object.assign(ov.style,{position:"fixed",inset:"0",zIndex:"2147483647",
-      cursor:"crosshair",background:"rgba(0,0,0,.45)"});
-    const hint=Object.assign(document.createElement("div"),
-      {textContent:"✏️  Drag around the chess board"});
-    Object.assign(hint.style,{position:"absolute",top:"16px",left:"50%",
-      transform:"translateX(-50%)",background:"#111",color:"#3ecf74",
-      padding:"8px 18px",borderRadius:"8px",fontFamily:"system-ui,sans-serif",
-      fontSize:"14px",pointerEvents:"none",whiteSpace:"nowrap"});
-    const box=document.createElement("div");
-    Object.assign(box.style,{position:"fixed",border:"2px solid #3ecf74",
-      background:"rgba(62,207,116,.1)",pointerEvents:"none",display:"none",
-      boxSizing:"border-box"});
-    ov.appendChild(hint);ov.appendChild(box);document.body.appendChild(ov);
-    let sx=0,sy=0,drag=false;
-    const xy=e=>e.touches?{x:e.touches[0].clientX,y:e.touches[0].clientY}:{x:e.clientX,y:e.clientY};
-    const down=e=>{e.preventDefault();const p=xy(e);sx=p.x;sy=p.y;drag=true;Object.assign(box.style,{display:"block",left:sx+"px",top:sy+"px",width:"0",height:"0"});};
-    const move=e=>{if(!drag)return;e.preventDefault();const p=xy(e);Object.assign(box.style,{left:Math.min(p.x,sx)+"px",top:Math.min(p.y,sy)+"px",width:Math.abs(p.x-sx)+"px",height:Math.abs(p.y-sy)+"px"});};
-    const up=e=>{if(!drag)return;drag=false;const r=box.getBoundingClientRect();
-      if(r.width<40||r.height<40){ov.remove();ping("cropResult","too_small");return;}
-      cfg.cropBox={left:r.left,top:r.top,width:r.width,height:r.height};
-      chrome.storage.local.set({cropBox:cfg.cropBox,cropDraw:false});
-      ping("cropResult","ok");ov.remove();};
-    ov.addEventListener("mousedown",down,{passive:false});
-    ov.addEventListener("touchstart",down,{passive:false});
-    ov.addEventListener("mousemove",move,{passive:false});
-    ov.addEventListener("touchmove",move,{passive:false});
-    ov.addEventListener("mouseup",up);
-    ov.addEventListener("touchend",up);
-  }
-
-  /* ── Utils ───────────────────────────────────────────────────── */
-  function logMove(uci,fen){
-    const now=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    const t=typeof fen==="string"?(fen.split(" ")[1]==="w"?"White":"Black"):"?";
-    chrome.storage.local.get(["moveLog"],r=>{
-      const arr=(r.moveLog||[]).slice(-49);
-      arr.push(`${now}  ${uci}  (${t})`);
-      chrome.storage.local.set({moveLog:arr});
+  function logMove(uci, currentEval) {
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    chrome.storage.local.get(["moveLog"], (r) => {
+      const arr = (r.moveLog || []).slice(-49);
+      arr.push(`${now}  ${uci}  [${currentEval}]`);
+      chrome.storage.local.set({ moveLog: arr });
     });
   }
-  function ping(k,v){chrome.storage.local.set({[k]:v});}
-  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-  function log(msg){console.log("[EnginePilot] "+msg);}
 
+  function ping(k, v) { chrome.storage.local.set({ [k]: v }); }
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  setInterval(tick, 200);
+
+  function attachObserver() {
+    const board = document.querySelector("cg-board");
+    if (!board) {
+      setTimeout(attachObserver, 300);
+      return;
+    }
+    const obs = new MutationObserver(() => setTimeout(tick, 30));
+    obs.observe(board, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+  }
+  attachObserver();
 })();
