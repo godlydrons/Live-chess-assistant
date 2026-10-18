@@ -8,136 +8,131 @@
     *{box-sizing:border-box;margin:0;padding:0}
     body{width:260px;background:#141414;color:#e0e0e0;
          font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;user-select:none}
-    .hdr{background:#0e0e0e;padding:13px 15px 11px;border-bottom:1px solid #1e1e1e;
+    .hdr{background:#0e0e0e;padding:12px 15px 10px;border-bottom:1px solid #1e1e1e;
          display:flex;align-items:center;gap:10px}
     .hdr-icon{font-size:22px}
-    .hdr-title{font-size:15px;font-weight:700;color:#fff}
+    .hdr-title{font-size:14px;font-weight:700;color:#fff}
     .hdr-sub{font-size:10px;color:#444;margin-top:1px}
     .row{display:flex;align-items:center;justify-content:space-between;
-         padding:12px 15px;border-bottom:1px solid #1e1e1e}
+         padding:11px 15px;border-bottom:1px solid #1e1e1e}
     .row-label{font-size:13px;color:#bbb}
-    .switch{position:relative;width:44px;height:24px;flex-shrink:0}
+    .switch{position:relative;width:42px;height:23px;flex-shrink:0}
     .switch input{opacity:0;width:0;height:0}
-    .slider{position:absolute;inset:0;background:#2a2a2a;border-radius:24px;
+    .slider{position:absolute;inset:0;background:#2a2a2a;border-radius:23px;
             cursor:pointer;transition:background .2s}
-    .slider::before{content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;
-                    background:#555;border-radius:50%;transition:transform .2s,background .2s}
+    .slider::before{content:'';position:absolute;width:17px;height:17px;
+                    left:3px;top:3px;background:#555;border-radius:50%;
+                    transition:transform .2s,background .2s}
     input:checked+.slider{background:#145c32}
-    input:checked+.slider::before{transform:translateX(20px);background:#3ecf74}
-    .status-bar{padding:9px 15px;background:#0c0c0c;border-bottom:1px solid #1e1e1e;
-                font-size:11px;color:#555;min-height:32px;display:flex;align-items:center}
-    .status-bar.live{color:#3ecf74}
-    .status-bar.warn{color:#f59e0b}
-    .section{padding:11px 15px;border-bottom:1px solid #1e1e1e}
-    .sec-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#3a3a3a;margin-bottom:9px}
-    .srow{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+    input:checked+.slider::before{transform:translateX(19px);background:#3ecf74}
+    .status-bar{padding:8px 15px;background:#0c0c0c;border-bottom:1px solid #1e1e1e;
+                font-size:11px;color:#555;min-height:30px;display:flex;align-items:center}
+    .status-bar.live{color:#3ecf74}.status-bar.warn{color:#f59e0b}
+    .sec{padding:10px 15px;border-bottom:1px solid #1e1e1e}
+    .sec-t{font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+            color:#3a3a3a;margin-bottom:8px}
+    .srow{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
     .srow:last-child{margin-bottom:0}
-    .sname{font-size:12px;color:#999}
-    .sctrl{display:flex;align-items:center;gap:5px}
-    .sctrl button{width:22px;height:22px;background:#1e1e1e;border:1px solid #303030;
-                  border-radius:5px;color:#777;font-size:14px;cursor:pointer;
-                  display:flex;align-items:center;justify-content:center;transition:background .15s}
-    .sctrl button:hover{background:#2a2a2a;color:#ccc}
-    .snum{font-size:12px;font-weight:600;color:#ddd;min-width:28px;text-align:center}
-    select{background:#1e1e1e;border:1px solid #303030;color:#ccc;
-           font-size:12px;padding:3px 7px;border-radius:5px;cursor:pointer;outline:none}
-    /* Mode toggle */
-    .mode-row{display:flex;gap:6px;margin-bottom:0}
-    .mode-btn{flex:1;padding:7px 4px;background:#1a1a1a;border:1px solid #2e2e2e;
-              border-radius:6px;color:#666;font-size:11px;cursor:pointer;text-align:center;
-              transition:all .15s}
-    .mode-btn.active{background:#0d1f14;border-color:#3ecf74;color:#3ecf74}
-    .crop-btn{width:100%;padding:9px;background:#1a1a1a;border:1px solid #2e2e2e;
-              border-radius:7px;color:#aaa;font-size:12px;cursor:pointer;
-              text-align:center;transition:background .15s,border-color .15s}
-    .crop-btn:hover{background:#222;border-color:#3ecf74;color:#3ecf74}
+    .sn{font-size:12px;color:#999}
+    .sc{display:flex;align-items:center;gap:4px}
+    .sc button{width:21px;height:21px;background:#1e1e1e;border:1px solid #2e2e2e;
+               border-radius:4px;color:#666;font-size:13px;cursor:pointer;
+               display:flex;align-items:center;justify-content:center}
+    .sc button:hover{background:#2a2a2a;color:#ccc}
+    .sv{font-size:12px;font-weight:600;color:#ddd;min-width:32px;text-align:center}
+    select{background:#1e1e1e;border:1px solid #2e2e2e;color:#ccc;
+           font-size:11px;padding:2px 6px;border-radius:4px;cursor:pointer;outline:none}
+    .mode-row{display:flex;gap:5px}
+    .mb{flex:1;padding:6px 4px;background:#1a1a1a;border:1px solid #2a2a2a;
+        border-radius:5px;color:#555;font-size:11px;cursor:pointer;text-align:center;
+        transition:all .15s}
+    .mb.on{background:#0d1f14;border-color:#3ecf74;color:#3ecf74}
+    .crop-btn{width:100%;padding:8px;background:#1a1a1a;border:1px solid #2a2a2a;
+              border-radius:6px;color:#888;font-size:11px;cursor:pointer;text-align:center}
     .crop-btn.set{border-color:#3ecf74;color:#3ecf74;background:#0d1f14}
-    .crop-clear{font-size:10px;color:#ef4444;cursor:pointer;text-align:center;
-                margin-top:5px;display:none}
-    .log-entries{max-height:66px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
-    .log-entry{font-size:11px;color:#444;font-family:'Consolas',monospace}
-    .log-entry.fresh{color:#3ecf74}
-    .log-entries::-webkit-scrollbar{width:3px}
-    .log-entries::-webkit-scrollbar-thumb{background:#282828;border-radius:2px}
-    .footer{padding:9px 15px;display:flex;align-items:center;gap:6px}
-    .fdot{width:5px;height:5px;border-radius:50%;background:#6d28d9}
-    .ftxt{font-size:10px;color:#333}
+    .crop-clear{font-size:10px;color:#ef4444;cursor:pointer;
+                text-align:center;margin-top:4px;display:none}
+    .log-wrap{max-height:62px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+    .log-e{font-size:11px;color:#444;font-family:'Consolas',monospace}
+    .log-e.new{color:#3ecf74}
+    .footer{padding:8px 15px;display:flex;align-items:center;gap:6px}
+    .fd{width:5px;height:5px;border-radius:50%;background:#6d28d9}
+    .ft{font-size:10px;color:#2a2a2a}
   </style>
 </head>
 <body>
-
 <div class="hdr">
   <div class="hdr-icon">♟</div>
   <div>
-    <div class="hdr-title">Engine Pilot</div>
-    <div class="hdr-sub">Lichess engine assistant v6</div>
+    <div class="hdr-title">Engine Pilot v16</div>
+    <div class="hdr-sub">Local WASM · Bullet Mode</div>
   </div>
 </div>
 
 <div class="row">
-  <span class="row-label">Auto-play engine</span>
-  <label class="switch">
-    <input type="checkbox" id="toggle"/>
-    <span class="slider"></span>
-  </label>
+  <span class="row-label">Active</span>
+  <label class="switch"><input type="checkbox" id="tog"/><span class="slider"></span></label>
 </div>
 
-<div class="status-bar" id="statusBar">⚫ Inactive</div>
+<div class="row" style="border-bottom:none; padding-top:0;">
+  <span class="row-label" style="color:#e0e0e0; font-weight:600;">Bullet Mode (0.5s - 2s)</span>
+  <label class="switch"><input type="checkbox" id="bulletTog"/><span class="slider"></span></label>
+</div>
 
-<div class="section">
-  <div class="sec-title">Mode</div>
+<div class="status-bar" id="sb">⚫ Inactive</div>
+
+<div class="sec">
+  <div class="sec-t">Mode</div>
   <div class="mode-row">
-    <button class="mode-btn active" id="modeAutoplay">⚡ Auto-play</button>
-    <button class="mode-btn"        id="modeHighlight">🟡 Highlight only</button>
+    <button class="mb on" id="mAuto">⚡ Auto-play</button>
+    <button class="mb"    id="mHL">🟡 Highlight</button>
   </div>
 </div>
 
-<div class="section">
-  <div class="sec-title">Engine</div>
+<div class="sec">
+  <div class="sec-t">Engine Settings</div>
   <div class="srow">
-    <span class="sname">Depth</span>
-    <div class="sctrl">
+    <span class="sn">Depth</span>
+    <div class="sc">
       <button id="dD">−</button>
-      <span class="snum" id="depthV">8</span>
+      <span class="sv" id="dV">10</span>
       <button id="dU">+</button>
     </div>
   </div>
   <div class="srow">
-    <span class="sname">Move delay (ms)</span>
-    <div class="sctrl">
+    <span class="sn">Move delay (ms)</span>
+    <div class="sc">
       <button id="lD">−</button>
-      <span class="snum" id="delayV">100</span>
+      <span class="sv" id="lV">50</span>
       <button id="lU">+</button>
     </div>
   </div>
   <div class="srow">
-    <span class="sname">Orientation</span>
-    <select id="oriSel">
-      <option value="auto">Auto-detect</option>
+    <span class="sn">Orientation</span>
+    <select id="ori">
+      <option value="auto">Auto</option>
       <option value="white">White</option>
       <option value="black">Black</option>
     </select>
   </div>
 </div>
 
-<div class="section">
-  <div class="sec-title">Board detection</div>
-  <button class="crop-btn" id="cropBtn">✏️  Draw board crop box</button>
-  <div class="crop-clear" id="cropClear">✕ Clear crop box</div>
+<div class="sec">
+  <div class="sec-t">Board Alignment</div>
+  <button class="crop-btn" id="cropBtn">✏️ Draw crop box</button>
+  <div class="crop-clear" id="cropClr">✕ Clear crop box</div>
 </div>
 
-<div class="section">
-  <div class="sec-title">Move log</div>
-  <div class="log-entries" id="logEl">
-    <div class="log-entry" style="color:#2a2a2a">— no moves yet —</div>
+<div class="sec">
+  <div class="sec-t">Move log</div>
+  <div class="log-wrap" id="log">
+    <div class="log-e" style="color:#222">— no moves yet —</div>
   </div>
 </div>
 
-<div class="footer">
-  <div class="fdot"></div>
-  <span class="ftxt">stockfish.online · reactive WS mode</span>
+<div class="footer"><div class="fd"></div>
+  <span class="ft">Dynamic Timeout · Local execution</span>
 </div>
-
 <script src="popup.js"></script>
 </body>
 </html>
