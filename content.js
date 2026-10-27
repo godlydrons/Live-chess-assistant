@@ -1,4 +1,9 @@
-/**VAMOS
+/**
+ * content.js — Upgraded v9.0.0 Engine Pilot
+ * Compatible 100% with v9.0.0 background.js (stockfish-19-asm.js)
+ * - 0ms Animation Bypass (no waiting for piece.anim)
+ * - Instant ~80ms Wave 1 + Automatic Depth 14 Wave 2 if you hesitate
+ * - Closed Shadow DOM Overlay (zero elements injected into <cg-board>)
  */
 (function () {
   "use strict";
@@ -8,14 +13,23 @@
     "black king": "k", "black queen": "q", "black rook": "r", "black bishop": "b", "black knight": "n", "black pawn": "p"
   };
 
-  let cfg = { depth: 10, delay: 40, orientation: "auto", mode: "autoplay", bulletMode: false };
+  let cfg = { depth: 10, delay: 20, orientation: "auto", mode: "autoplay", bulletMode: false };
   let active = false;
   let busy = false;
+
   let lastOurTurnBoard = null;
+  let searchWave = 0; // 0 = Fast 80ms wave, 1 = Deep 700ms wave, 2 = Done
+  let lastWaveTime = 0;
+
   let lastPonderBoard = null;
   let prevGrid = null;
   let lastDetectedTurn = "w";
   let queuedResponse = null;
+
+  // Closed Shadow DOM references
+  let shadowHost = null;
+  let shadowRoot = null;
+  let shadowSvg = null;
 
   chrome.storage.local.get(["depth", "delay", "orientation", "mode", "bulletMode", "active"], (r) => {
     if (r.depth != null) cfg.depth = r.depth;
@@ -32,6 +46,15 @@
     if (ch.orientation) cfg.orientation = ch.orientation.newValue;
     if (ch.mode) cfg.mode = ch.mode.newValue;
     if (ch.bulletMode) cfg.bulletMode = ch.bulletMode.newValue;
+    if (ch.active) {
+      active = !!ch.active.newValue;
+      busy = false;
+      lastOurTurnBoard = null;
+      lastPonderBoard = null;
+      queuedResponse = null;
+      searchWave = 0;
+      if (!active) clearHighlights();
+    }
   });
 
   chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
@@ -41,6 +64,7 @@
       lastOurTurnBoard = null;
       lastPonderBoard = null;
       queuedResponse = null;
+      searchWave = 0;
       if (!active) clearHighlights();
     }
     if (msg.action === "setMode") cfg.mode = msg.value;
@@ -72,10 +96,12 @@
   }
 
   function detectTurn(grid, lastMoveSquares, ori) {
-    // 1. Lichess live move list (<kwdb>)
-    const moveNodes = document.querySelectorAll("kwdb, rm6 kwdb, l4x kwdb");
-    if (moveNodes.length > 0) {
-      return moveNodes.length % 2 === 0 ? "w" : "b";
+    // 1. Occupied square.last-move (100% accurate for Puzzle Streak, Racer, and Live Games)
+    for (const lm of lastMoveSquares) {
+      const p = grid[lm.r]?.[lm.f];
+      if (p) {
+        return p === p.toUpperCase() ? "b" : "w";
+      }
     }
 
     // 2. Grid diff from previous frame
@@ -100,14 +126,6 @@
     if (document.querySelector(".rclock-bottom.running")) return ori === "white" ? "w" : "b";
     if (document.querySelector(".rclock-top.running")) return ori === "white" ? "b" : "w";
 
-    // 4. Occupied square.last-move (for Puzzle Streak / Racer initial position)
-    for (const lm of lastMoveSquares) {
-      const p = grid[lm.r]?.[lm.f];
-      if (p) {
-        return p === p.toUpperCase() ? "b" : "w";
-      }
-    }
-
     return lastDetectedTurn || "w";
   }
 
@@ -116,8 +134,9 @@
     if (!boardEl) return null;
     const rect = boardEl.getBoundingClientRect();
     if (rect.width < 50) return null;
-    if (boardEl.querySelector("piece.anim")) return null;
 
+    // 0ms Animation Bypass: We do NOT return null on `piece.anim`!
+    // Chessground writes the final destination translate(x,y) immediately at 0ms.
     const ori = getOurColor();
     const sqW = rect.width / 8;
     const sqH = rect.height / 8;
@@ -145,7 +164,7 @@
 
     for (const p of boardEl.querySelectorAll("piece")) {
       if (p.classList.contains("ghost") || p.classList.contains("dragging") || p.classList.contains("fading")) continue;
-      const cleanClass = p.className.replace(/\b(anim|fading|selected|check)\b/g, "").trim().replace(/\s+/g, " ");
+      const cleanClass = p.className.replace(/\b(anim|fading|selected|check|last-dest)\b/g, "").trim().replace(/\s+/g, " ");
       const letter = PIECE_FEN[cleanClass];
       if (!letter) continue;
       const c = coordsFromStyle(p);
@@ -174,11 +193,10 @@
 
     const prevRows = prevGrid ? prevGrid.map(r => r.map(c => c || ".").join("")).join("/") : null;
     const curRows = grid.map(r => r.map(c => c || ".").join("")).join("/");
-    const detectedTurn = detectTurn(grid, lastMoveSquares, ori);
 
     if (curRows !== prevRows) {
+      lastDetectedTurn = detectTurn(grid, lastMoveSquares, ori);
       prevGrid = grid;
-      lastDetectedTurn = detectedTurn;
     }
 
     let cas = "";
@@ -187,9 +205,10 @@
 
     return {
       rows,
-      fen: `${rows} ${detectedTurn} ${cas || "-"} - 0 1`,
-      turn: detectedTurn,
-      ori
+      fen: `${rows} ${lastDetectedTurn} ${cas || "-"} - 0 1`,
+      turn: lastDetectedTurn,
+      ori,
+      rect
     };
   }
 
@@ -245,18 +264,22 @@
     const state = scrapeBoardState();
     if (!state) return;
 
+    syncOverlayPos(state.rect);
+
     const ourColorChar = state.ori[0];
     const isOurTurn = state.turn === ourColorChar;
 
     // 1. OPPONENT'S TURN -> PONDER / QUEUE MODE
     if (!isOurTurn) {
+      lastOurTurnBoard = null;
+      searchWave = 0;
       if (state.rows === lastPonderBoard) return;
       lastPonderBoard = state.rows;
       ping("status", "🧠 Pondering opponent...");
 
       busy = true;
       try {
-        const oppRes = await requestAnalysis(state.fen, { depth: Math.min(cfg.depth, 10), movetime: 300 }, null);
+        const oppRes = await requestAnalysis(state.fen, { depth: 8, movetime: 140 }, null);
         if (oppRes?.uci && oppRes?.ponder) {
           const expectedRowsAfterOpp = applyUciToRows(state.rows, oppRes.uci);
           if (expectedRowsAfterOpp) {
@@ -275,10 +298,18 @@
       return;
     }
 
-    // 2. OUR TURN
-    if (state.rows === lastOurTurnBoard) return;
+    // 2. OUR TURN (Wave 0 = Instant ~80ms, Wave 1 = Deep 700ms if user waits 1.2s)
+    if (state.rows !== lastOurTurnBoard) {
+      lastOurTurnBoard = state.rows;
+      searchWave = 0;
+      lastWaveTime = 0;
+    }
+
+    if (searchWave >= 2) return;
+    if (searchWave === 1 && Date.now() - lastWaveTime < 1200) return;
+
     busy = true;
-    lastOurTurnBoard = state.rows;
+    const currentWave = searchWave;
 
     try {
       let uciToPlay = null;
@@ -286,35 +317,49 @@
       let moveEval = "0.00";
       let moveSource = "asm-local";
 
-      if (queuedResponse && queuedResponse.expectedRows === state.rows) {
+      if (currentWave === 0 && queuedResponse && queuedResponse.expectedRows === state.rows) {
         uciToPlay = queuedResponse.ourMove;
         moveEval = queuedResponse.eval;
         moveSource = "queue⚡";
         queuedResponse = null;
       } else {
-        queuedResponse = null;
-        const oppRating = getOpponentRating();
-        ping("status", oppRating ? `⚡ Calc (vs ${oppRating})...` : "⚡ Calculating...");
+        if (currentWave === 0) queuedResponse = null;
+        const oppRating = currentWave === 0 ? getOpponentRating() : null;
 
-        const options = cfg.bulletMode
-          ? { movetime: 150, depth: 8 }
-          : { depth: cfg.depth };
+        let options;
+        if (currentWave === 0) {
+          // Wave 0: Super-fast 80ms cap so the first arrow snaps on screen immediately!
+          options = cfg.bulletMode
+            ? { movetime: 65, depth: 7 }
+            : { movetime: 90, depth: Math.min(cfg.depth, 9) };
+          ping("status", "⚡ Fast Calc...");
+        } else {
+          // Wave 1: User waited 1.2s without moving -> Deep 750ms calculation!
+          options = { movetime: 750, depth: Math.max(cfg.depth + 4, 15) };
+          ping("status", "🔥 Deepening...");
+        }
 
         const res = await requestAnalysis(state.fen, options, oppRating);
+        const checkState = scrapeBoardState();
+        if (!checkState || checkState.rows !== state.rows) return;
+
         uciToPlay = res.uci;
         ponderToDraw = res.ponder;
         moveEval = res.eval || "0.00";
-        moveSource = res.source || "asm-local";
+        moveSource = currentWave === 1 ? "🔥deep" : (res.source || "asm-local");
       }
 
       if (!uciToPlay) throw new Error("No move found");
 
+      searchWave = currentWave + 1;
+      lastWaveTime = Date.now();
+
       ping("status", `♟ ${uciToPlay} (${moveEval}) [${moveSource}]`);
-      drawBoardOverlay(uciToPlay, ponderToDraw, state.ori);
+      drawBoardOverlay(uciToPlay, ponderToDraw, state.ori, currentWave);
       logMove(uciToPlay, moveEval);
 
-      if (cfg.mode === "autoplay") {
-        await sleep(Math.max(15, cfg.delay));
+      if (cfg.mode === "autoplay" && currentWave === 0) {
+        await sleep(Math.max(10, cfg.delay));
         await playMove(uciToPlay, state.ori);
       }
     } catch (e) {
@@ -325,30 +370,36 @@
     }
   }
 
-  function clearHighlights() {
-    const existing = document.getElementById("ep-svg-overlay");
-    if (existing) existing.remove();
+  /* ── Closed Shadow DOM Overlay (Invisible to <cg-board> & querySelector) ── */
+  function ensureShadowOverlay() {
+    if (shadowHost && document.documentElement.contains(shadowHost)) return;
+    shadowHost = document.createElement("div");
+    shadowHost.style.cssText = "position:fixed; pointer-events:none; z-index:2147483647; top:0; left:0; width:0; height:0;";
+    shadowRoot = shadowHost.attachShadow({ mode: "closed" });
+    shadowSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    shadowSvg.setAttribute("viewBox", "0 0 800 800");
+    shadowSvg.style.cssText = "position:fixed; pointer-events:none; overflow:visible;";
+    shadowRoot.appendChild(shadowSvg);
+    document.documentElement.appendChild(shadowHost);
   }
 
-  function drawBoardOverlay(bestUci, ponderUci, ori) {
+  function syncOverlayPos(rect) {
+    if (!shadowSvg || !rect) return;
+    shadowSvg.style.left = rect.left + "px";
+    shadowSvg.style.top = rect.top + "px";
+    shadowSvg.style.width = rect.width + "px";
+    shadowSvg.style.height = rect.height + "px";
+  }
+
+  function clearHighlights() {
+    if (shadowSvg) shadowSvg.innerHTML = "";
+  }
+
+  function drawBoardOverlay(bestUci, ponderUci, ori, wave) {
     const boardEl = document.querySelector("cg-board");
     if (!boardEl) return;
-
-    let svg = document.getElementById("ep-svg-overlay");
-    if (!svg || !boardEl.contains(svg)) {
-      svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.id = "ep-svg-overlay";
-      svg.setAttribute("viewBox", "0 0 800 800");
-      Object.assign(svg.style, {
-        position: "absolute",
-        inset: "0",
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none",
-        zIndex: "99"
-      });
-      boardEl.appendChild(svg);
-    }
+    ensureShadowOverlay();
+    syncOverlayPos(boardEl.getBoundingClientRect());
 
     function sqCenterSvg(sq) {
       const f = sq.charCodeAt(0) - 97;
@@ -375,17 +426,19 @@
       `;
     }
 
-    svg.innerHTML = `
+    const mainColor = wave === 1 ? "#f59e0b" : "#14c83c";
+
+    shadowSvg.innerHTML = `
       <defs>
         <marker id="ep-g" markerWidth="3.5" markerHeight="3.5" refX="1.8" refY="1.75" orient="auto">
-          <polygon points="0,0 3.5,1.75 0,3.5" fill="#14c83c" />
+          <polygon points="0,0 3.5,1.75 0,3.5" fill="${mainColor}" />
         </marker>
         <marker id="ep-b" markerWidth="3.5" markerHeight="3.5" refX="1.8" refY="1.75" orient="auto">
           <polygon points="0,0 3.5,1.75 0,3.5" fill="#38bdf8" />
         </marker>
       </defs>
       ${ponderUci ? buildArrow(ponderUci, "#38bdf8", "ep-b", "0.55") : ""}
-      ${buildArrow(bestUci, "#14c83c", "ep-g", "0.9")}
+      ${buildArrow(bestUci, mainColor, "ep-g", "0.9")}
     `;
   }
 
@@ -423,14 +476,14 @@
     const promo = uci[4] || null;
 
     firePointerAndMouse(board, "mousedown", src.x, src.y, 1);
-    await sleep(20);
+    await sleep(15);
     firePointerAndMouse(board, "mousemove", dst.x, dst.y, 1);
-    await sleep(20);
+    await sleep(15);
     firePointerAndMouse(board, "mousedown", dst.x, dst.y, 1);
     firePointerAndMouse(board, "mouseup", dst.x, dst.y, 0);
 
     if (promo) {
-      await sleep(90);
+      await sleep(70);
       const promoEl = document.querySelector(
         `.promotion-choice [data-symbol="${promo.toUpperCase()}"], .promotion-choice .${promo}, .cg-promotion .${promo}`
       );
@@ -455,15 +508,15 @@
   function ping(k, v) { chrome.storage.local.set({ [k]: v }); }
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-  setInterval(tick, 200);
+  setInterval(tick, 50);
 
   function attachObserver() {
     const board = document.querySelector("cg-board");
     if (!board) {
-      setTimeout(attachObserver, 300);
+      setTimeout(attachObserver, 200);
       return;
     }
-    const obs = new MutationObserver(() => setTimeout(tick, 30));
+    const obs = new MutationObserver(() => tick());
     obs.observe(board, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
   }
   attachObserver();
