@@ -1,9 +1,3 @@
-/**
- * engine-offscreen.js
- * Spawns stockfish-19-lite.js (nmrugg build) directly as a Web Worker!
- * Inside this worker, self.location.href is chrome-extension://.../stockfish-19-lite.js,
- * so it automatically resolves stockfish-19-lite.wasm in the same folder!
- */
 const worker = new Worker(chrome.runtime.getURL(' stockfish-19-asm.js'));
 
 let sfReady = false;
