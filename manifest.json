@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Lichess Engine Pilot",
-  "version": "9.0.0",
-  "description": "Local Stockfish 19 ASM.js Engine — Zero CSP, Android & Desktop.",
+  "name": "chessmachine",
+  "version": "9.5.0",
+  "description": "live assistant for chess games on lichess for hyperfast time controls",
   "permissions": [
     "storage",
     "activeTab",
-    "offscreen"
+    "debugger"
   ],
   "host_permissions": [
     "https://lichess.org/*",
