@@ -14,7 +14,7 @@
     .hdr-title{font-size:14px;font-weight:700;color:#fff}
     .hdr-sub{font-size:10px;color:#444;margin-top:1px}
     .row{display:flex;align-items:center;justify-content:space-between;
-         padding:11px 15px;border-bottom:1px solid #1e1e1e}
+         padding:10px 15px;border-bottom:1px solid #1e1e1e}
     .row-label{font-size:13px;color:#bbb}
     .switch{position:relative;width:42px;height:23px;flex-shrink:0}
     .switch input{opacity:0;width:0;height:0}
@@ -64,8 +64,8 @@
 <div class="hdr">
   <div class="hdr-icon">♟</div>
   <div>
-    <div class="hdr-title">Engine Pilot v16</div>
-    <div class="hdr-sub">Local WASM · Bullet Mode</div>
+    <div class="hdr-title">Engine Pilot v17</div>
+    <div class="hdr-sub">Zero-Freeze · Racer & Bullet Edition</div>
   </div>
 </div>
 
@@ -74,9 +74,14 @@
   <label class="switch"><input type="checkbox" id="tog"/><span class="slider"></span></label>
 </div>
 
-<div class="row" style="border-bottom:none; padding-top:0;">
-  <span class="row-label" style="color:#e0e0e0; font-weight:600;">Bullet Mode (0.5s - 2s)</span>
+<div class="row" style="padding-top:4px; padding-bottom:8px;">
+  <span class="row-label" style="color:#e0e0e0; font-weight:600;">⚡ Bullet Mode (1+0)</span>
   <label class="switch"><input type="checkbox" id="bulletTog"/><span class="slider"></span></label>
+</div>
+
+<div class="row" style="border-bottom:none; padding-top:0;">
+  <span class="row-label" style="color:#38bdf8; font-weight:600;">🏎️ Puzzle Racer Mode</span>
+  <label class="switch"><input type="checkbox" id="racerTog"/><span class="slider"></span></label>
 </div>
 
 <div class="status-bar" id="sb">⚫ Inactive</div>
@@ -95,7 +100,7 @@
     <span class="sn">Depth</span>
     <div class="sc">
       <button id="dD">−</button>
-      <span class="sv" id="dV">10</span>
+      <span class="sv" id="dV">7</span>
       <button id="dU">+</button>
     </div>
   </div>
@@ -103,7 +108,7 @@
     <span class="sn">Move delay (ms)</span>
     <div class="sc">
       <button id="lD">−</button>
-      <span class="sv" id="lV">50</span>
+      <span class="sv" id="lV">15</span>
       <button id="lU">+</button>
     </div>
   </div>
@@ -131,7 +136,7 @@
 </div>
 
 <div class="footer"><div class="fd"></div>
-  <span class="ft">Dynamic Timeout · Local execution</span>
+  <span class="ft">Stateless Racer · Auto-Recovery</span>
 </div>
 <script src="popup.js"></script>
 </body>
