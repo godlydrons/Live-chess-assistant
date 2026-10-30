@@ -1,6 +1,3 @@
-/**
- * engine-worker.js
- */
 const BASE_URL = self.location.href.replace(/[^/]*$/, '');
 importScripts(BASE_URL + 'stockfish-19-asm.js');
 
